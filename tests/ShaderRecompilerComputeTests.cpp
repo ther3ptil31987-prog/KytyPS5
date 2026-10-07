@@ -24729,10 +24729,10 @@ TestCase VectorCompareInteger64Edges() {
     const auto lhs = pairs[i][0], rhs = pairs[i][1];
     const auto signed_lhs = std::bit_cast<int64_t>(lhs);
     const auto signed_rhs = std::bit_cast<int64_t>(rhs);
-    for (const auto [opcode, value] : std::array<std::pair<u32, bool>, 5>{{
-             {0xa1, signed_lhs < signed_rhs}, {0xa3, signed_lhs <= signed_rhs},
-             {0xa5, lhs != rhs},
-             {0xe3, lhs <= rhs}, {0xe6, lhs >= rhs}}}) {
+    for (const auto [opcode, value] : std::array<std::pair<u32, bool>, 9>{{
+             {0xa0, false}, {0xa1, signed_lhs < signed_rhs},
+             {0xa3, signed_lhs <= signed_rhs}, {0xa5, lhs != rhs}, {0xa7, true},
+             {0xe0, false}, {0xe3, lhs <= rhs}, {0xe6, lhs >= rhs}, {0xe7, true}}}) {
       test.code.push_back(EncodeVopc(opcode, Vgpr(1), 3));
       store_mask(106, value);
       AppendVop3(&test.code, opcode, 20, Vgpr(1), 8);
@@ -24750,6 +24750,12 @@ TestCase VectorCompareInteger64Edges() {
     AppendVop3(&test.code, 0xa3, 20, Vgpr(1), 255);
     test.code.push_back(0xffffffffu);
     store_mask(20, signed_lhs <= -1);
+    test.code.push_back(EncodeSop1(0x04, 10, 126));
+    AppendVop3(&test.code, 0xb2, 126, 255, Vgpr(3)); // CMPX_EQ_I64 sign-extends -1.
+    test.code.push_back(0xffffffffu);
+    test.code.push_back(EncodeSop1(0x04, 20, 126));
+    test.code.push_back(EncodeSop1(0x04, 126, 10));
+    store_mask(20, -1 == signed_rhs);
     // Captured 8395e43f382309df PC 0x20cc: s[2:3] = (s[0:1] != 0) & EXEC.
     // Save the test buffer descriptor while its SGPRs hold the captured operands.
     test.code.push_back(EncodeSop1(0x04, 32, 0));
@@ -24765,8 +24771,9 @@ TestCase VectorCompareInteger64Edges() {
   AppendEnd(&test.code);
   test.initial.resize(test.expected.size());
   test.opcodes = {O::V_MOV_B32, O::BUFFER_LOAD_DWORD, O::V_READFIRSTLANE_B32,
-                  O::V_CMP_LT_I64, O::V_CMP_LE_I64, O::V_CMP_EQ_I64, O::V_CMP_NE_I64,
-                  O::V_CMP_LE_U64, O::V_CMP_GE_U64,
+                  O::V_CMP_F_I64, O::V_CMP_LT_I64, O::V_CMP_LE_I64, O::V_CMP_EQ_I64,
+                  O::V_CMP_NE_I64, O::V_CMP_T_I64, O::V_CMPX_EQ_I64,
+                  O::V_CMP_F_U64, O::V_CMP_LE_U64, O::V_CMP_GE_U64, O::V_CMP_T_U64,
                   O::S_MOV_B64, O::BUFFER_STORE_DWORD, O::S_ENDPGM};
   test.required_spirv = {"OpSLessThan", "OpULessThanEqual", "OpUGreaterThanEqual"};
   return test;
@@ -24774,7 +24781,7 @@ TestCase VectorCompareInteger64Edges() {
 
 TestCase VectorCompareExecWaveMasks(u32 wave_size) {
   using O = ShaderOpcode;
-  // Rows exercise signed 16-bit truncation, full-width unsigned ordering, and
+  // Rows exercise signed 16-bit truncation, full-width integer ordering, and
   // ordered FP64 comparisons (including NaN, signed zero, and subnormals).
   constexpr std::array<std::array<std::array<uint64_t, 2>, 8>, 3> inputs{{
       {{{0x1111ffff, 0x22220000}, {0x33338000, 0x44447fff},
@@ -24795,8 +24802,13 @@ TestCase VectorCompareExecWaveMasks(u32 wave_size) {
       Compare{0x99, O::V_CMPX_LT_I16, 0}, Compare{0x9a, O::V_CMPX_EQ_I16, 0},
       Compare{0x9b, O::V_CMPX_LE_I16, 0}, Compare{0x9c, O::V_CMPX_GT_I16, 0},
       Compare{0x9d, O::V_CMPX_NE_I16, 0}, Compare{0x9e, O::V_CMPX_GE_I16, 0},
-      Compare{0xf3, O::V_CMPX_LE_U64, 1}, Compare{0x33, O::V_CMPX_LE_F64, 2},
-      Compare{0x36, O::V_CMPX_GE_F64, 2}};
+      Compare{0xb0, O::V_CMPX_F_I64, 1}, Compare{0xb1, O::V_CMPX_LT_I64, 1},
+      Compare{0xb2, O::V_CMPX_EQ_I64, 1}, Compare{0xb3, O::V_CMPX_LE_I64, 1},
+      Compare{0xb7, O::V_CMPX_T_I64, 1}, Compare{0xf0, O::V_CMPX_F_U64, 1},
+      Compare{0xf1, O::V_CMPX_LT_U64, 1}, Compare{0xf2, O::V_CMPX_EQ_U64, 1},
+      Compare{0xf3, O::V_CMPX_LE_U64, 1}, Compare{0xf4, O::V_CMPX_GT_U64, 1},
+      Compare{0xf6, O::V_CMPX_GE_U64, 1}, Compare{0xf7, O::V_CMPX_T_U64, 1},
+      Compare{0x33, O::V_CMPX_LE_F64, 2}, Compare{0x36, O::V_CMPX_GE_F64, 2}};
   constexpr u32 low_exec = 0xeeeeeeeeu, high_exec = 0x77777777u;
   constexpr u32 vcc_lo = 0x12345678u, vcc_hi = 0x89abcdefu;
   TestCase test;
@@ -24832,7 +24844,15 @@ TestCase VectorCompareExecWaveMasks(u32 wave_size) {
         case 0x9c: result = a > b; break;
         case 0x9d: result = a != b; break;
         case 0x9e: result = a >= b; break;
+        case 0xb0: case 0xf0: result = false; break;
+        case 0xb1: result = std::bit_cast<int64_t>(pair[0]) < std::bit_cast<int64_t>(pair[1]); break;
+        case 0xb2: case 0xf2: result = pair[0] == pair[1]; break;
+        case 0xb3: result = std::bit_cast<int64_t>(pair[0]) <= std::bit_cast<int64_t>(pair[1]); break;
+        case 0xb7: case 0xf7: result = true; break;
+        case 0xf1: result = pair[0] < pair[1]; break;
         case 0xf3: result = pair[0] <= pair[1]; break;
+        case 0xf4: result = pair[0] > pair[1]; break;
+        case 0xf6: result = pair[0] >= pair[1]; break;
         case 0x33: result = std::bit_cast<double>(pair[0]) <= std::bit_cast<double>(pair[1]); break;
         case 0x36: result = std::bit_cast<double>(pair[0]) >= std::bit_cast<double>(pair[1]); break;
       }
@@ -32243,6 +32263,66 @@ TestCase DsAppendUsesEncodedGdsSelector() {
   return test;
 }
 
+TestCase DsOrderedCountAddressAndExec(u32 wave_size, bool pixel_counter) {
+  using O = ShaderOpcode;
+  TestCase test;
+  test.name = pixel_counter
+                  ? (wave_size == 64 ? "DsOrderedCountPixelAddressWave64"
+                                     : "DsOrderedCountPixelAddressWave32")
+                  : (wave_size == 64 ? "DsOrderedCountAddressAndExecWave64"
+                                     : "DsOrderedCountAddressAndExecWave32");
+  auto &code = test.code;
+  // Both the base and OFFSET0 are aligned independently; M0's low bits are
+  // a wave index, or a pixel packer ID, rather than a byte address or size.
+  AppendSMovLiteral(&code, 124, 0x01030003u);
+  code.push_back(EncodeSop1(0x04, 10, 126)); // Save the full EXEC mask.
+  code.push_back(EncodeVop2(0x25, 2, InlineU32(1), 0)); // ADDR value = lane + 1.
+  AppendVMovU32(&code, 9, 99); // DATA0 must not supply the count.
+  const u32 selected_lane = wave_size == 64 ? 47u : 7u;
+  const std::array<uint64_t, 3> masks = {
+      wave_size == 64 ? UINT64_MAX : uint64_t{UINT32_MAX},
+      uint64_t{1} << selected_lane, 0};
+  u32 counter = 1000;
+  for (bool exchange : {false, true}) {
+    for (size_t mode = 0; mode < masks.size(); ++mode) {
+      AppendVMovU32(&code, 3, 0xdeadbeefu);
+      AppendSMovLiteral(&code, 126, static_cast<u32>(masks[mode]));
+      AppendSMovLiteral(&code, 127, static_cast<u32>(masks[mode] >> 32u));
+      const u32 release_done = exchange && mode == 2 ? 3u : 0u;
+      const u32 offset1 = release_done | (pixel_counter ? 4u : 0u) |
+                          (exchange ? 0x10u : 0u);
+      code.push_back(EncodeDs0(0x3f, (offset1 << 8u) | 7u, true));
+      code.push_back(EncodeDs1(3, 9, 2));
+      code.push_back(EncodeSopp(0x0c, 0)); // Wait for the returned GDS value.
+      code.push_back(EncodeSop1(0x04, 126, 10)); // Restore EXEC before reading all lanes.
+      AppendStoreVgprAtLaneDwordOffset(&code, 3, 0,
+                                      static_cast<u32>(test.expected.size()));
+      test.expected.insert(test.expected.end(), wave_size, counter);
+      if (mode != 2) {
+        const u32 value = mode == 0 ? 1u : selected_lane + 1u;
+        counter = exchange ? value : counter + value;
+      }
+    }
+  }
+  AppendEnd(&code);
+  test.initial.assign(test.expected.size(), 0xdeadbeefu);
+  const u32 counter_address = pixel_counter ? 0x110u : 0x104u;
+  test.gds_initial.assign(0x120u / sizeof(u32), 100);
+  test.gds_initial[counter_address / sizeof(u32)] = 1000;
+  test.expected_gds = test.gds_initial;
+  test.expected_gds[counter_address / sizeof(u32)] = counter;
+  test.compute_info.threads_num[0] = wave_size;
+  test.compute_info.threads_num[1] = 1;
+  test.compute_info.threads_num[2] = 1;
+  test.compute_info.thread_ids_num = 1;
+  test.compute_info.wave_size = wave_size;
+  test.has_compute_info = true;
+  test.opcodes = {O::S_MOV_B32, O::S_MOV_B64, O::V_ADD_NC_U32, O::V_MOV_B32,
+                  O::DS_ORDERED_COUNT, O::S_WAITCNT, O::V_LSHLREV_B32,
+                  O::BUFFER_STORE_DWORD, O::S_ENDPGM};
+  return test;
+}
+
 TestCase DsAppendConsumeGdsRegionBounds() {
   using O = ShaderOpcode;
   struct Access {
@@ -33541,7 +33621,8 @@ void CheckIndirectBufferStore(VulkanHarness &vulkan) {
   candidate.indirect_search_iterations = 0;
   candidate.indirect_resources.clear();
   program.descriptor_sources.resize(1);
-  program.descriptor_sources[0].indirect_descriptor.emplace().table_stride = 16;
+  program.descriptor_sources[0].indirect_descriptor =
+      DescriptorSource::IndirectDescriptor{.table_stride = 16};
   ShaderComputeInputInfo compute;
   compute.wave_size = 32;
   compute.host_subgroup_size = vulkan.SubgroupSize();
@@ -35537,6 +35618,10 @@ std::vector<TestCase> MakeCases() {
   cases.push_back(DsAppendAllocatesAcrossWaves(32));
   cases.push_back(DsAppendAllocatesAcrossWaves(64));
   AddCase(DsAppendUsesEncodedGdsSelector);
+  for (u32 wave_size : {32, 64}) {
+    cases.push_back(DsOrderedCountAddressAndExec(wave_size, false));
+    cases.push_back(DsOrderedCountAddressAndExec(wave_size, true));
+  }
   AddCase(DsAppendConsumeGdsRegionBounds);
   AddCase(DsGdsSubdwordAndAtomicWrites);
   AddCase(DsReadWrite2Variants);
@@ -40650,6 +40735,15 @@ int main(int argc, char **argv) {
     vulkan.CheckNativeIndirectDispatch();
     return 0;
   }
+  if (argc == 2 && std::strcmp(argv[1], "--integer64-compare-only") == 0) {
+    VulkanHarness vulkan;
+    RunCase(&vulkan, VectorCompareInteger64Edges());
+    RunCase(&vulkan, VectorCompareExecWaveMasks(32));
+    RunCase(&vulkan, VectorCompareExecWaveMasks(64));
+    RunCase(&vulkan, VectorVopcCmpxNeU64CapturedExecMask());
+    RunCase(&vulkan, VectorVop3CmpxNeI64CapturedExecMask());
+    return 0;
+  }
   if (argc == 2 && std::strcmp(argv[1], "--new-opcodes-only") == 0) {
     VulkanHarness vulkan;
     RunCase(&vulkan, VectorCompareInteger64Edges());
@@ -41055,6 +41149,14 @@ int main(int argc, char **argv) {
     for (const auto &atomic : ImageAtomicIntegerCases) {
       RunCase(&vulkan, ImageAtomicIntegerGlcAndExec(atomic, false));
       RunCase(&vulkan, ImageAtomicIntegerGlcAndExec(atomic, true));
+    }
+    return 0;
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--ds-ordered-count-only") == 0) {
+    VulkanHarness vulkan;
+    for (u32 wave_size : {32, 64}) {
+      RunCase(&vulkan, DsOrderedCountAddressAndExec(wave_size, false));
+      RunCase(&vulkan, DsOrderedCountAddressAndExec(wave_size, true));
     }
     return 0;
   }
